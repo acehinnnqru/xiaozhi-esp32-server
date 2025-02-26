@@ -1,45 +1,31 @@
-# 第一阶段：前端构建
-
-FROM kalicyh/node:v18-alpine AS frontend-builder
-
-WORKDIR /app/ZhiKongTaiWeb
-
-# RUN corepack enable && yarn config set registry https://registry.npmmirror.com
-
-COPY ZhiKongTaiWeb/package.json ZhiKongTaiWeb/yarn.lock ./
-
-RUN yarn install --frozen-lockfile
-
-COPY ZhiKongTaiWeb . 
-RUN yarn build
-
-# 第二阶段：构建 Python 依赖
-
-FROM kalicyh/poetry:v3.10_xiaozhi AS builder
+FROM python:3.10-slim AS builder
 
 WORKDIR /app
 
-# 同时拷贝本地环境.venv
+COPY requirements.txt .
+
+# 优化apt安装
+RUN pip install --no-cache-dir -r requirements.txt \
+    -i https://mirrors.aliyun.com/pypi/simple/
+
+# 第三阶段：生产镜像
+FROM python:3.10-slim
+
+WORKDIR /opt/xiaozhi-esp32-server
+
+# 优化apt安装
+RUN echo "deb https://mirrors.aliyun.com/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
+    echo "deb https://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libopus0 ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 从构建阶段复制Python包和前端构建产物
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+
+# 复制应用代码
 COPY . .
-# 检查是否有缺失
-RUN poetry install --no-root
-
-# 使用清华源加速apt安装，该镜像内置所以注释
-# RUN rm -rf /etc/apt/sources.list.d/* && \
-#     echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-#     echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-#     echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm-backports main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-#     echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-#     apt-get update && \
-#     apt-get install -y --no-install-recommends libopus0 ffmpeg && \
-#     apt-get clean
-
-# 从构建阶段复制虚拟环境和前端构建产物
-COPY --from=frontend-builder /app/ZhiKongTaiWeb/dist /app/manager/static/webui
-
-# 设置虚拟环境路径
-ENV PATH="/app/.venv/bin:$PATH"
 
 # 启动应用
-ENTRYPOINT ["poetry", "run", "python"]
-CMD ["app.py"]
+CMD ["python", "app.py"]
